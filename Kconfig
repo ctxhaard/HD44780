@@ -1,0 +1,8 @@
+comment "LCD display drivers"
+
+config HD44780
+	tristate "Support for HD44780 2-lines LCD display"
+	default m
+	depends on GPIOLIB
+	help
+	  This option enables support for HD44780 2-lines LCD display.
