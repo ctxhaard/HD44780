@@ -56,8 +56,8 @@
 
 	lcd_pins: lcd_pins {
 		brcm,pins = <DISPL_RS DISPL_E 
-					DISPL_DB4 DISPL_DB5 
-					DISPL_DB6 DISPL_DB7>;
+				DISPL_DB4 DISPL_DB5 
+				DISPL_DB6 DISPL_DB7>;
 		brcm,function = <1>;    // output
 	};
 };

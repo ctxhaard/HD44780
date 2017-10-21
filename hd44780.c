@@ -27,7 +27,16 @@
 #include <linux/platform_device.h>
 #include <linux/of.h>
 
-// TODO: continuare qui...
+// TODO: il modulo deve creare un character device che permette solo operazioni di:
+// - scrittura : scrive direttamente nella prima posizione tutti i caratteri indicati; la riga sottostante è una
+//			mera continuazione della riga sopra
+// - lseek     : permette di posizionarsi direttamente su una certa posizione ed andare ad aggiornare solo questa
+//			(in modo da velocizzare le operazioni in cui una parte del testo è fissa e una parte viene aggiornata
+//			spesso; es: "distanza: 132 cm"
+
+// creazione del dispositivo a caratteri
+// probe
+// module init
 
 MODULE_AUTHOR("Carlo Tomasin <c.tomasin@gmail.com>");
 MODULE_DESCRIPTION("Device driver for HD4480 2-lines LCD display");
