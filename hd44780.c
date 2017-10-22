@@ -20,6 +20,7 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
+#define DEBUG
 
 #include <linux/module.h>
 #include <linux/gpio/consumer.h>
@@ -38,6 +39,48 @@
 // probe
 // module init
 
+static int hd44780_probe(struct platform_device *pdev)
+{
+	return 0;
+}
+
+static int hd44780_remove(struct platform_device *pdev)
+{
+	return 0;
+}
+
+static const struct of_device_id hd44780_match[] = {
+		{
+				.compatible = "hd44780",
+		},
+		{},
+};
+
+static struct platform_driver hd44780_platform_driver = {
+		.probe = hd44780_probe,
+		.remove = hd44780_remove,
+		.driver = {
+				.name = "HD44780",
+				.owner = THIS_MODULE,
+				.of_match_table = of_match_ptr(hd44780_match)
+		}
+};
+
+static int __init hd44780_init(void)
+{
+	platform_driver_register(&hd44780_platform_driver);
+	pr_debug("hd4480 module init");
+	return 0;
+}
+
+static void __exit hd44780_exit(void)
+{
+	pr_debug("hd4480 module exit");
+}
+
+module_init(hd44780_init)
+module_exit(hd44780_exit)
+
 MODULE_AUTHOR("Carlo Tomasin <c.tomasin@gmail.com>");
 MODULE_DESCRIPTION("Device driver for HD4480 2-lines LCD display");
-MODULE_LICENSE("GPLv3");
+MODULE_LICENSE("GPL");

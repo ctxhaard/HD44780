@@ -54,7 +54,7 @@
 		brcm,function = <4>;
 	};
 
-	lcd_pins: lcd_pins {
+	hd44780_pins: hd44780_pins {
 		brcm,pins = <DISPL_RS DISPL_E 
 				DISPL_DB4 DISPL_DB5 
 				DISPL_DB6 DISPL_DB7>;
@@ -70,13 +70,17 @@
 };
 
 &soc {
-       hcsr04: hcsr04 {
-               compatible = "hcsr04";
+       hd44780: hd44780 {
+               compatible = "hd44780";
                pinctrl-names = "default";
-               pinctrl-0 = <&hcsr04_pins>;
+               pinctrl-0 = <&hd44780_pins>;
                // see Documentation/gpio/board.txt
-               proximity-gpios = <&gpio 23 0>, // trigger
-                                 <&gpio 24 0>; // echo
+               lcd-gpios = <&gpio DISPL_RS 0>,
+                           <&gpio DISPL_E 0>,
+                           <&gpio DISPL_DB4 0>,
+                           <&gpio DISPL_DB5 0>,
+                           <&gpio DISPL_DB6 0>,
+                           <&gpio DISPL_DB7 0>;
                status="okay";
        };
 };
