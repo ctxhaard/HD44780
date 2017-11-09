@@ -27,6 +27,20 @@
 #include <linux/pinctrl/consumer.h>
 #include <linux/platform_device.h>
 #include <linux/of.h>
+#include <linux/delay.h>
+
+struct hd44780_data {
+
+	struct platform_device *pdev;
+	struct gpio_descs *gpios;
+
+	struct gpio_desc *gpio_rs;
+	struct gpio_desc *gpio_en;
+	struct gpio_desc *gpio_db4;
+	struct gpio_desc *gpio_db5;
+	struct gpio_desc *gpio_db6;
+	struct gpio_desc *gpio_db7;
+};
 
 // TODO: il modulo deve creare un character device che permette solo operazioni di:
 // - scrittura : scrive direttamente nella prima posizione tutti i caratteri indicati; la riga sottostante è una
@@ -36,12 +50,154 @@
 //			spesso; es: "distanza: 132 cm"
 
 // creazione del dispositivo a caratteri
-// probe
-// module init
+
+static void hd44780_pulse_enable(struct hd44780_data *pdata)
+{
+	gpiod_set_value_cansleep(pdata->gpio_en, 0);
+	udelay(1);
+	gpiod_set_value_cansleep(pdata->gpio_en, 1);
+	udelay(1);
+	gpiod_set_value_cansleep(pdata->gpio_en, 0);
+	udelay(100);
+}
+
+static void hd44780_write_4_bits(struct hd44780_data *pdata, u8 val)
+{
+	gpiod_set_value_cansleep(pdata->gpio_db7, val & (1 << 3));
+	gpiod_set_value_cansleep(pdata->gpio_db6, val & (1 << 2));
+	gpiod_set_value_cansleep(pdata->gpio_db5, val & (1 << 1));
+	gpiod_set_value_cansleep(pdata->gpio_db4, val & (1 << 0));
+	hd44780_pulse_enable(pdata);
+}
+
+static void hd44780_send(struct hd44780_data *pdata, u8 val, u8 mode)
+{
+	gpiod_set_value_cansleep(pdata->gpio_rs, mode);
+	hd44780_write_4_bits(pdata, val >> 4);
+	hd44780_write_4_bits(pdata, val);
+}
+
+static void  hd44780_command(struct hd44780_data *pdata, u8 val)
+{
+	hd44780_send(pdata, val, 0);
+}
+
+static void hd44780_data(struct hd44780_data *pdata, u8 val)
+{
+	hd44780_send(pdata, val, 1);
+}
+
+static int hd44780_print(struct hd44780_data *pdata, char *msg) {
+	// TODO: riportare ad inizio riga
+	while (*msg) {
+		hd44780_data(pdata, *msg);
+		++msg;
+	}
+	return 0;
+}
+
+
+static int hd44780_prompt(struct hd44780_data *pdata)
+{
+	char *msg = "Hello!!!";
+
+	dev_info(&pdata->pdev->dev, "showing prompt: %s\n", msg);
+
+	hd44780_print(pdata, msg);
+	return 0;
+}
+
+static int hd44780_setup(struct hd44780_data *pdata)
+{
+	dev_info(&pdata->pdev->dev, "setting up LCD\n");
+	mdelay(40);
+	hd44780_write_4_bits(pdata, 0x03);
+
+	mdelay(5);
+	hd44780_write_4_bits(pdata, 0x03);
+
+	udelay(150);
+	hd44780_write_4_bits(pdata, 0x03);
+
+	hd44780_write_4_bits(pdata, 0x02);
+	return 0;
+}
 
 static int hd44780_probe(struct platform_device *pdev)
 {
+	struct hd44780_data *pdata;
+	struct pinctrl      *pinctrl;
+	struct pinctrl_state *pstate;
+	struct gpio_desc *pdesc;
+	int i;
+
+	pdata = devm_kzalloc(&pdev->dev, sizeof(*pdata), GFP_KERNEL);
+	if (!pdata)
+		return -ENOMEM;
+
+	pdata->pdev = pdev;
+
+	pinctrl = devm_pinctrl_get(&pdata->pdev->dev);
+	if (IS_ERR(pinctrl)) {
+		dev_err(&pdev->dev, "can't get pinctrl handle\n");
+		return -EIO;
+	}
+
+	pstate = pinctrl_lookup_state(pinctrl, PINCTRL_STATE_DEFAULT);
+	if (!pstate) {
+		dev_err(&pdev->dev, "can't find default pinctrl state\n");
+		return -EIO;
+	}
+
+	if (pinctrl_select_state(pinctrl, pstate)) {
+
+		dev_err(&pdev->dev, "cant't select default pinctrl state\n");
+		return -EIO;
+	}
+
+	pdata->gpios = devm_gpiod_get_array(&pdev->dev, "lcd", 0);
+	if (IS_ERR(pdata->gpios) || pdata->gpios->ndescs < 6) {
+		dev_err(&pdev->dev, "can't get gpios\n");
+		return -EINVAL;
+	}
+
+	for (i = 0; i < pdata->gpios->ndescs; ++i) {
+		pdesc = pdata->gpios->desc[i];
+		gpiod_direction_output(pdesc, 0);
+	}
+
+	pdesc = pdata->gpios->desc[0];
+	if (!pdesc) goto gpio_err;
+	pdata->gpio_rs = pdesc;
+
+	pdesc = pdata->gpios->desc[1];
+	if (!pdesc) goto gpio_err;
+	pdata->gpio_en = pdesc;
+
+	pdesc = pdata->gpios->desc[2];
+	if (!pdesc) goto gpio_err;
+	pdata->gpio_db4 = pdesc;
+
+	pdesc = pdata->gpios->desc[3];
+	if (!pdesc) goto gpio_err;
+	pdata->gpio_db5 = pdesc;
+
+	pdesc = pdata->gpios->desc[4];
+	if (!pdesc) goto gpio_err;
+	pdata->gpio_db6 = pdesc;
+
+	pdesc = pdata->gpios->desc[5];
+	if (!pdesc) goto gpio_err;
+	pdata->gpio_db7 = pdesc;
+
+	hd44780_setup(pdata);
+
+	hd44780_prompt(pdata);
 	return 0;
+
+gpio_err:
+	dev_err(&pdev->dev, "can't get gpios\n");
+	return -EINVAL;
 }
 
 static int hd44780_remove(struct platform_device *pdev)
@@ -68,14 +224,14 @@ static struct platform_driver hd44780_platform_driver = {
 
 static int __init hd44780_init(void)
 {
-	platform_driver_register(&hd44780_platform_driver);
-	pr_debug("hd4480 module init");
-	return 0;
+	pr_info("hd4480 module init\n");
+	return platform_driver_register(&hd44780_platform_driver);
 }
 
 static void __exit hd44780_exit(void)
 {
-	pr_debug("hd4480 module exit");
+	pr_info("hd4480 module exit\n");
+	platform_driver_unregister(&hd44780_platform_driver);
 }
 
 module_init(hd44780_init)
