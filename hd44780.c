@@ -28,6 +28,10 @@
 #include <linux/platform_device.h>
 #include <linux/of.h>
 #include <linux/delay.h>
+#include <linux/kernel.h>
+
+#define CMD_LINE_1 0x80
+#define CMD_LINE_2 0xc0
 
 struct hd44780_data {
 
@@ -53,16 +57,18 @@ struct hd44780_data {
 
 static void hd44780_pulse_enable(struct hd44780_data *pdata)
 {
+	dev_dbg(&pdata->pdev->dev,"=> EN pulse\n");
 	gpiod_set_value_cansleep(pdata->gpio_en, 0);
-	udelay(1);
+	udelay(500);
 	gpiod_set_value_cansleep(pdata->gpio_en, 1);
-	udelay(1);
+	udelay(500);
 	gpiod_set_value_cansleep(pdata->gpio_en, 0);
-	udelay(100);
+	udelay(500);
 }
 
 static void hd44780_write_4_bits(struct hd44780_data *pdata, u8 val)
 {
+	dev_dbg(&pdata->pdev->dev,"=> 0x%02x\n", (val & 0xf));
 	gpiod_set_value_cansleep(pdata->gpio_db7, val & (1 << 3));
 	gpiod_set_value_cansleep(pdata->gpio_db6, val & (1 << 2));
 	gpiod_set_value_cansleep(pdata->gpio_db5, val & (1 << 1));
@@ -72,9 +78,12 @@ static void hd44780_write_4_bits(struct hd44780_data *pdata, u8 val)
 
 static void hd44780_send(struct hd44780_data *pdata, u8 val, u8 mode)
 {
+	dev_dbg(&pdata->pdev->dev,"%s: 0x%02x\n", (mode ? "CHAR" : "CMD"), val);
+	udelay(1);
 	gpiod_set_value_cansleep(pdata->gpio_rs, mode);
 	hd44780_write_4_bits(pdata, val >> 4);
-	hd44780_write_4_bits(pdata, val);
+	hd44780_write_4_bits(pdata, (val & 0xf));
+	//mdelay(5);
 }
 
 static void  hd44780_command(struct hd44780_data *pdata, u8 val)
@@ -82,7 +91,7 @@ static void  hd44780_command(struct hd44780_data *pdata, u8 val)
 	hd44780_send(pdata, val, 0);
 }
 
-static void hd44780_data(struct hd44780_data *pdata, u8 val)
+static void hd44780_char(struct hd44780_data *pdata, u8 val)
 {
 	hd44780_send(pdata, val, 1);
 }
@@ -90,7 +99,7 @@ static void hd44780_data(struct hd44780_data *pdata, u8 val)
 static int hd44780_print(struct hd44780_data *pdata, char *msg) {
 	// TODO: riportare ad inizio riga
 	while (*msg) {
-		hd44780_data(pdata, *msg);
+		hd44780_char(pdata, *msg);
 		++msg;
 	}
 	return 0;
@@ -99,10 +108,11 @@ static int hd44780_print(struct hd44780_data *pdata, char *msg) {
 
 static int hd44780_prompt(struct hd44780_data *pdata)
 {
-	char *msg = "Hello!!!";
+	char *msg = "HD44780 Linux";
 
 	dev_info(&pdata->pdev->dev, "showing prompt: %s\n", msg);
 
+//	hd44780_command(pdata,0x01);
 	hd44780_print(pdata, msg);
 	return 0;
 }
@@ -110,16 +120,13 @@ static int hd44780_prompt(struct hd44780_data *pdata)
 static int hd44780_setup(struct hd44780_data *pdata)
 {
 	dev_info(&pdata->pdev->dev, "setting up LCD\n");
-	mdelay(40);
-	hd44780_write_4_bits(pdata, 0x03);
-
-	mdelay(5);
-	hd44780_write_4_bits(pdata, 0x03);
-
-	udelay(150);
-	hd44780_write_4_bits(pdata, 0x03);
-
-	hd44780_write_4_bits(pdata, 0x02);
+	hd44780_command(pdata,0x33); //lcd_byte(0x33,LCD_CMD) # 110011 Initialise
+	hd44780_command(pdata,0x32); //lcd_byte(0x32,LCD_CMD) # 110010 Initialise
+	hd44780_command(pdata,0x06); //lcd_byte(0x06,LCD_CMD) # 000110 Cursor move direction
+	hd44780_command(pdata,0x0c); //lcd_byte(0x0C,LCD_CMD) # 001100 Display On,Cursor Off, Blink Off
+	hd44780_command(pdata,0x28); //lcd_byte(0x28,LCD_CMD) # 101000 Data length, number of lines, font size
+	hd44780_command(pdata,0x01); //lcd_byte(0x01,LCD_CMD) # 000001 Clear display
+	mdelay(1);
 	return 0;
 }
 
@@ -202,6 +209,11 @@ gpio_err:
 
 static int hd44780_remove(struct platform_device *pdev)
 {
+//	char *msg = "bye";
+//	struct hd44780_data *pdata;
+
+//	pdata = container_of(pdev,struct hd44780_data,pdev);
+//	hd44780_print(pdata, msg);
 	return 0;
 }
 
