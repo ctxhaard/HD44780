@@ -29,9 +29,18 @@
 #include <linux/of.h>
 #include <linux/delay.h>
 #include <linux/kernel.h>
+#include <linux/utsname.h>
+#include <linux/fs.h>
+#include <linux/cdev.h>
+#include <linux/uaccess.h>
 
-#define CMD_LINE_1 0x80
-#define CMD_LINE_2 0xc0
+#define CMD_CLEAR_DISPLAY     (1 << 0)
+#define CMD_RETURN_HOME       (1 << 1)
+#define CMD_SET_DDRAM         (1 << 7)
+#define CMD_SET_DDRAM_LINE_1  (CMD_SET_DDRAM | 0x00)
+#define CMD_SET_DDRAM_LINE_2  (CMD_SET_DDRAM | 0x40)
+
+#define CMD_CLEAR_DISP  0x01
 
 struct hd44780_data {
 
@@ -44,6 +53,9 @@ struct hd44780_data {
 	struct gpio_desc *gpio_db5;
 	struct gpio_desc *gpio_db6;
 	struct gpio_desc *gpio_db7;
+
+	dev_t devn;
+	struct cdev cdev;
 };
 
 // TODO: il modulo deve creare un character device che permette solo operazioni di:
@@ -83,7 +95,7 @@ static void hd44780_send(struct hd44780_data *pdata, u8 val, u8 mode)
 	gpiod_set_value_cansleep(pdata->gpio_rs, mode);
 	hd44780_write_4_bits(pdata, val >> 4);
 	hd44780_write_4_bits(pdata, (val & 0xf));
-	//mdelay(5);
+	mdelay(1);
 }
 
 static void  hd44780_command(struct hd44780_data *pdata, u8 val)
@@ -97,10 +109,36 @@ static void hd44780_char(struct hd44780_data *pdata, u8 val)
 }
 
 static int hd44780_print(struct hd44780_data *pdata, char *msg) {
-	// TODO: riportare ad inizio riga
+	hd44780_command(pdata,CMD_CLEAR_DISP);
+
 	while (*msg) {
-		hd44780_char(pdata, *msg);
+		if(*msg == '\n') {
+			hd44780_command(pdata, CMD_SET_DDRAM_LINE_2);
+		} else {
+			hd44780_char(pdata, *msg);
+		}
 		++msg;
+	}
+	return 0;
+}
+
+static int hd44780_line(struct hd44780_data *pdata, char *txt, int line) {
+
+	u8 cmd;
+
+	switch(line) {
+	case 1:
+		cmd = CMD_SET_DDRAM_LINE_2;
+		break;
+	default:
+		cmd = CMD_SET_DDRAM_LINE_1;
+		break;
+	}
+	hd44780_command(pdata, cmd);
+
+	while (*txt) {
+		hd44780_char(pdata, *txt);
+		++txt;
 	}
 	return 0;
 }
@@ -108,27 +146,60 @@ static int hd44780_print(struct hd44780_data *pdata, char *msg) {
 
 static int hd44780_prompt(struct hd44780_data *pdata)
 {
-	char *msg = "HD44780 Linux";
+	struct new_utsname *name;
 
-	dev_info(&pdata->pdev->dev, "showing prompt: %s\n", msg);
+	name = utsname();
 
-//	hd44780_command(pdata,0x01);
-	hd44780_print(pdata, msg);
+	hd44780_line(pdata, name->sysname, 0);
+	hd44780_line(pdata, name->release, 1);
 	return 0;
 }
 
 static int hd44780_setup(struct hd44780_data *pdata)
 {
 	dev_info(&pdata->pdev->dev, "setting up LCD\n");
-	hd44780_command(pdata,0x33); //lcd_byte(0x33,LCD_CMD) # 110011 Initialise
-	hd44780_command(pdata,0x32); //lcd_byte(0x32,LCD_CMD) # 110010 Initialise
-	hd44780_command(pdata,0x06); //lcd_byte(0x06,LCD_CMD) # 000110 Cursor move direction
-	hd44780_command(pdata,0x0c); //lcd_byte(0x0C,LCD_CMD) # 001100 Display On,Cursor Off, Blink Off
-	hd44780_command(pdata,0x28); //lcd_byte(0x28,LCD_CMD) # 101000 Data length, number of lines, font size
-	hd44780_command(pdata,0x01); //lcd_byte(0x01,LCD_CMD) # 000001 Clear display
-	mdelay(1);
+	hd44780_command(pdata,0x33); // 110011 Initialise
+	hd44780_command(pdata,0x32); // 110010 Initialise
+	hd44780_command(pdata,0x06); // 000110 Cursor move direction
+	hd44780_command(pdata,0x0c); // 001100 Display On,Cursor Off, Blink Off
+	hd44780_command(pdata,0x28); // 101000 Data length, number of lines, font size
+	hd44780_command(pdata,CMD_CLEAR_DISP); //lcd_byte(0x01,LCD_CMD) # 000001 Clear display
+//	mdelay(1);
 	return 0;
 }
+
+int hd44780_open(struct inode *inode, struct file *filp)
+{
+	struct hd44780_data *pdata; /* device information */
+	pdata = container_of(inode->i_cdev, struct hd44780_data, cdev);
+	filp->private_data = pdata; /* for other methods */
+	return 0;
+}
+
+ssize_t hd44780_write (struct file *filp, const char __user *buff, size_t count, loff_t *offp)
+{
+	char buffer[256]; // TODO valore migliore
+	struct hd44780_data *pdata;
+
+	// TODO: gestire reentrant
+
+	if(copy_from_user(buffer, buff, count)) {
+		return -EFAULT;
+	}
+
+	pdata = filp->private_data;
+	buffer[count] = 0x00;
+	hd44780_print(pdata, buffer);
+	// TODO: continuare qui...
+	return strlen(buffer);
+}
+
+struct file_operations hd44780_fops = {
+
+		.owner = THIS_MODULE,
+		.open  = hd44780_open,
+		.write = hd44780_write,
+};
 
 static int hd44780_probe(struct platform_device *pdev)
 {
@@ -197,9 +268,22 @@ static int hd44780_probe(struct platform_device *pdev)
 	if (!pdesc) goto gpio_err;
 	pdata->gpio_db7 = pdesc;
 
+	dev_set_drvdata(&pdev->dev, pdata);
+
 	hd44780_setup(pdata);
 
 	hd44780_prompt(pdata);
+
+	alloc_chrdev_region(&pdata->devn, 0, 10, "LCD display char device");
+	cdev_init(&pdata->cdev, &hd44780_fops);
+	pdata->cdev.owner = THIS_MODULE;
+	pdata->cdev.ops = &hd44780_fops;
+
+	if (cdev_add(&pdata->cdev, pdata->devn, 1)) {
+		dev_err(&pdev->dev, "cannot add char device\n");
+	}
+	dev_info(&pdev->dev,"major: %d minor: %d\n",MAJOR(pdata->devn), MINOR(pdata->devn));
+
 	return 0;
 
 gpio_err:
@@ -209,11 +293,15 @@ gpio_err:
 
 static int hd44780_remove(struct platform_device *pdev)
 {
-//	char *msg = "bye";
-//	struct hd44780_data *pdata;
+	char *msg = "bye";
+	struct hd44780_data *pdata;
 
-//	pdata = container_of(pdev,struct hd44780_data,pdev);
-//	hd44780_print(pdata, msg);
+	pdata = (struct hd44780_data *)dev_get_drvdata(&pdev->dev);
+
+	cdev_del(&pdata->cdev);
+	unregister_chrdev_region(pdata->devn, 10);
+
+	hd44780_print(pdata, msg);
 	return 0;
 }
 
