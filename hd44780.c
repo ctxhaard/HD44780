@@ -58,6 +58,10 @@ struct hd44780_data {
 	struct cdev cdev;
 };
 
+static struct class *lcd_class;
+static dev_t first;
+static dev_t next;
+
 // TODO: il modulo deve creare un character device che permette solo operazioni di:
 // - scrittura : scrive direttamente nella prima posizione tutti i caratteri indicati; la riga sottostante è una
 //			mera continuazione della riga sopra
@@ -274,7 +278,16 @@ static int hd44780_probe(struct platform_device *pdev)
 
 	hd44780_prompt(pdata);
 
-	alloc_chrdev_region(&pdata->devn, 0, 10, "LCD display char device");
+	// sysfs device
+	if( !lcd_class)
+		goto gpio_err;
+
+	pdata->devn = next;
+	next = MKDEV(MAJOR(next), MINOR(next) + 1);
+
+	device_create(lcd_class, NULL, pdata->devn, NULL, "lcd%d", MINOR(pdata->devn));
+	// end sysfs
+
 	cdev_init(&pdata->cdev, &hd44780_fops);
 	pdata->cdev.owner = THIS_MODULE;
 	pdata->cdev.ops = &hd44780_fops;
@@ -298,8 +311,13 @@ static int hd44780_remove(struct platform_device *pdev)
 
 	pdata = (struct hd44780_data *)dev_get_drvdata(&pdev->dev);
 
+	// sysfs device
+	if (lcd_class) {
+		device_destroy(lcd_class, pdata->devn);
+	}
+	// end sysfs
+
 	cdev_del(&pdata->cdev);
-	unregister_chrdev_region(pdata->devn, 10);
 
 	hd44780_print(pdata, msg);
 	return 0;
@@ -322,20 +340,30 @@ static struct platform_driver hd44780_platform_driver = {
 		}
 };
 
-static int __init hd44780_init(void)
+static int __init hd44780_module_init(void)
 {
 	pr_info("hd4480 module init\n");
+
+	lcd_class = class_create(THIS_MODULE,"lcd");
+	alloc_chrdev_region(&first, 0, 10, "lcdchar"); // a cosa serve il nome?
+	next = first;
+
 	return platform_driver_register(&hd44780_platform_driver);
 }
 
-static void __exit hd44780_exit(void)
+static void __exit hd44780_module_exit(void)
 {
 	pr_info("hd4480 module exit\n");
 	platform_driver_unregister(&hd44780_platform_driver);
+
+	if (lcd_class)
+		class_destroy(lcd_class);
+
+	unregister_chrdev_region(first, 10);
 }
 
-module_init(hd44780_init)
-module_exit(hd44780_exit)
+module_init(hd44780_module_init)
+module_exit(hd44780_module_exit)
 
 MODULE_AUTHOR("Carlo Tomasin <c.tomasin@gmail.com>");
 MODULE_DESCRIPTION("Device driver for HD4480 2-lines LCD display");
