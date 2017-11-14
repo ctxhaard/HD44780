@@ -20,7 +20,7 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
-#define DEBUG
+//#define DEBUG
 
 #include <linux/module.h>
 #include <linux/gpio/consumer.h>
@@ -33,12 +33,13 @@
 #include <linux/fs.h>
 #include <linux/cdev.h>
 #include <linux/uaccess.h>
+#include <linux/slab.h>
+#include <linux/spinlock.h>
 
 #define CMD_CLEAR_DISPLAY     (1 << 0)
 #define CMD_RETURN_HOME       (1 << 1)
 #define CMD_SET_DDRAM         (1 << 7)
-#define CMD_SET_DDRAM_LINE_1  (CMD_SET_DDRAM | 0x00)
-#define CMD_SET_DDRAM_LINE_2  (CMD_SET_DDRAM | 0x40)
+#define CMD_SET_DDRAM_LINE(x)  (CMD_SET_DDRAM | (0x40 * (x - 1)))
 
 #define CMD_CLEAR_DISP  0x01
 
@@ -46,7 +47,8 @@ struct hd44780_data {
 
 	struct platform_device *pdev;
 	struct gpio_descs *gpios;
-
+	int lines;
+	int cols;
 	struct gpio_desc *gpio_rs;
 	struct gpio_desc *gpio_en;
 	struct gpio_desc *gpio_db4;
@@ -56,6 +58,9 @@ struct hd44780_data {
 
 	dev_t devn;
 	struct cdev cdev;
+
+	spinlock_t lock;
+	spinlock_t write_lock;
 };
 
 static struct class *lcd_class;
@@ -94,12 +99,14 @@ static void hd44780_write_4_bits(struct hd44780_data *pdata, u8 val)
 
 static void hd44780_send(struct hd44780_data *pdata, u8 val, u8 mode)
 {
+	spin_lock(&pdata->write_lock);
 	dev_dbg(&pdata->pdev->dev,"%s: 0x%02x\n", (mode ? "CHAR" : "CMD"), val);
 	udelay(1);
 	gpiod_set_value_cansleep(pdata->gpio_rs, mode);
 	hd44780_write_4_bits(pdata, val >> 4);
 	hd44780_write_4_bits(pdata, (val & 0xf));
 	mdelay(1);
+	spin_unlock(&pdata->write_lock);
 }
 
 static void  hd44780_command(struct hd44780_data *pdata, u8 val)
@@ -115,11 +122,36 @@ static void hd44780_char(struct hd44780_data *pdata, u8 val)
 static int hd44780_print(struct hd44780_data *pdata, char *msg) {
 	hd44780_command(pdata,CMD_CLEAR_DISP);
 
+	int i;
+	int cols, lines;
+	int cur_line;
+
+	spin_lock(&pdata->lock);
+	cols = pdata->cols;
+	lines = pdata->lines;
+
+	spin_unlock(&pdata->lock);
+
+	i = 0;
+	cur_line = 1;
 	while (*msg) {
+		if (i > lines * cols)
+			break;
 		if(*msg == '\n') {
-			hd44780_command(pdata, CMD_SET_DDRAM_LINE_2);
+			++cur_line;
+			if(cur_line > lines)
+				break;
+			hd44780_command(pdata, CMD_SET_DDRAM_LINE(cur_line));
+			i = (i / cols) + cols;
 		} else {
+			if (i && 0 == (i % 16)) {
+				++cur_line;
+				if(cur_line > lines)
+					break;
+				hd44780_command(pdata, CMD_SET_DDRAM_LINE(cur_line));
+			}
 			hd44780_char(pdata, *msg);
+			++i;
 		}
 		++msg;
 	}
@@ -176,26 +208,40 @@ int hd44780_open(struct inode *inode, struct file *filp)
 {
 	struct hd44780_data *pdata; /* device information */
 	pdata = container_of(inode->i_cdev, struct hd44780_data, cdev);
+
 	filp->private_data = pdata; /* for other methods */
 	return 0;
 }
 
 ssize_t hd44780_write (struct file *filp, const char __user *buff, size_t count, loff_t *offp)
 {
-	char buffer[256]; // TODO valore migliore
+	char *buffer;
 	struct hd44780_data *pdata;
+	size_t len;
 
 	// TODO: gestire reentrant
+	pdata = filp->private_data;
 
-	if(copy_from_user(buffer, buff, count)) {
+	len = (pdata->cols * pdata->lines);
+	if (count < len)
+		len = count;
+
+	dev_dbg(&pdata->pdev->dev, "writing %d chars\n", len);
+
+	if (NULL == (buffer = kmalloc((len + 1), GFP_KERNEL)))
+		return -ENOMEM;
+
+	if(copy_from_user(buffer, buff, len)) {
 		return -EFAULT;
 	}
 
-	pdata = filp->private_data;
-	buffer[count] = 0x00;
+	buffer[len] = 0x00;
 	hd44780_print(pdata, buffer);
-	// TODO: continuare qui...
-	return strlen(buffer);
+
+	kfree(buffer);
+
+	*offp += count;
+	return count;
 }
 
 struct file_operations hd44780_fops = {
@@ -211,36 +257,50 @@ static int hd44780_probe(struct platform_device *pdev)
 	struct pinctrl      *pinctrl;
 	struct pinctrl_state *pstate;
 	struct gpio_desc *pdesc;
+	int retval;
 	int i;
 
 	pdata = devm_kzalloc(&pdev->dev, sizeof(*pdata), GFP_KERNEL);
-	if (!pdata)
+	if (!pdata) {
 		return -ENOMEM;
+	}
 
+	spin_lock_init(&pdata->lock);
+	spin_lock_init(&pdata->write_lock);
+
+	spin_lock(&pdata->lock);
 	pdata->pdev = pdev;
 
 	pinctrl = devm_pinctrl_get(&pdata->pdev->dev);
 	if (IS_ERR(pinctrl)) {
 		dev_err(&pdev->dev, "can't get pinctrl handle\n");
-		return -EIO;
+		retval = -EINVAL;
+		goto err_probe;
 	}
 
 	pstate = pinctrl_lookup_state(pinctrl, PINCTRL_STATE_DEFAULT);
 	if (!pstate) {
 		dev_err(&pdev->dev, "can't find default pinctrl state\n");
-		return -EIO;
+		retval = -EINVAL;
+		goto err_probe;
 	}
 
 	if (pinctrl_select_state(pinctrl, pstate)) {
 
 		dev_err(&pdev->dev, "cant't select default pinctrl state\n");
-		return -EIO;
+		retval = -EINVAL;
+		goto err_probe;
 	}
 
 	pdata->gpios = devm_gpiod_get_array(&pdev->dev, "lcd", 0);
 	if (IS_ERR(pdata->gpios) || pdata->gpios->ndescs < 6) {
 		dev_err(&pdev->dev, "can't get gpios\n");
-		return -EINVAL;
+		retval = -EINVAL;
+		goto err_probe;
+	}
+	if (pdata->gpios->ndescs < 6) {
+		retval = -EINVAL;
+		goto err_probe;
 	}
 
 	for (i = 0; i < pdata->gpios->ndescs; ++i) {
@@ -248,44 +308,40 @@ static int hd44780_probe(struct platform_device *pdev)
 		gpiod_direction_output(pdesc, 0);
 	}
 
-	pdesc = pdata->gpios->desc[0];
-	if (!pdesc) goto gpio_err;
-	pdata->gpio_rs = pdesc;
+	pdata->gpio_rs = pdata->gpios->desc[0];
+	pdata->gpio_en = pdata->gpios->desc[1];
+	pdata->gpio_db4 = pdata->gpios->desc[2];
+	pdata->gpio_db5 = pdata->gpios->desc[3];
+	pdata->gpio_db6 = pdata->gpios->desc[4];
+	pdata->gpio_db7 = pdata->gpios->desc[5];
 
-	pdesc = pdata->gpios->desc[1];
-	if (!pdesc) goto gpio_err;
-	pdata->gpio_en = pdesc;
+	of_property_read_u32(pdev->dev.of_node, "cols", &pdata->cols);
+	if (!pdata->cols)
+		pdata->cols = 16;
 
-	pdesc = pdata->gpios->desc[2];
-	if (!pdesc) goto gpio_err;
-	pdata->gpio_db4 = pdesc;
-
-	pdesc = pdata->gpios->desc[3];
-	if (!pdesc) goto gpio_err;
-	pdata->gpio_db5 = pdesc;
-
-	pdesc = pdata->gpios->desc[4];
-	if (!pdesc) goto gpio_err;
-	pdata->gpio_db6 = pdesc;
-
-	pdesc = pdata->gpios->desc[5];
-	if (!pdesc) goto gpio_err;
-	pdata->gpio_db7 = pdesc;
+	of_property_read_u32(pdev->dev.of_node, "lines", &pdata->lines);
+	if (!pdata->lines)
+		pdata->lines = 2;
 
 	dev_set_drvdata(&pdev->dev, pdata);
 
 	hd44780_setup(pdata);
-
 	hd44780_prompt(pdata);
 
 	// sysfs device
-	if( !lcd_class)
-		goto gpio_err;
+	if( !lcd_class) {
+		dev_err(&pdev->dev, "can't get gpios\n");
+		retval = -EINVAL;
+		goto err_probe;
+	}
 
 	pdata->devn = next;
 	next = MKDEV(MAJOR(next), MINOR(next) + 1);
 
-	device_create(lcd_class, NULL, pdata->devn, NULL, "lcd%d", MINOR(pdata->devn));
+	if (NULL == device_create(lcd_class, NULL, pdata->devn, NULL, "lcd%d", MINOR(pdata->devn))) {
+		retval = -EIO;
+		goto err_probe;
+	}
 	// end sysfs
 
 	cdev_init(&pdata->cdev, &hd44780_fops);
@@ -293,15 +349,17 @@ static int hd44780_probe(struct platform_device *pdev)
 	pdata->cdev.ops = &hd44780_fops;
 
 	if (cdev_add(&pdata->cdev, pdata->devn, 1)) {
+		retval = -EIO;
 		dev_err(&pdev->dev, "cannot add char device\n");
+		goto err_probe;
 	}
+
 	dev_info(&pdev->dev,"major: %d minor: %d\n",MAJOR(pdata->devn), MINOR(pdata->devn));
+	retval = 0;
 
-	return 0;
-
-gpio_err:
-	dev_err(&pdev->dev, "can't get gpios\n");
-	return -EINVAL;
+err_probe:
+	spin_unlock(&pdata->lock);
+	return retval;
 }
 
 static int hd44780_remove(struct platform_device *pdev)

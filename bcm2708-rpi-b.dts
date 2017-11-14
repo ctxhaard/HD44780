@@ -4,8 +4,11 @@
 #include "bcm283x-rpi-smsc9512.dtsi"
 
 // display ----------------------------
+// DISPL_RW => connect RW to ground (always writing)
+// V0 => connect to GND (max contrast); eventually partition
+// in order to get a lower voltage / contrast
+// it is possible to not power up backlight LEDS (+,-) 
 #define DISPL_RS       23 // (rpi pin 16) register select
-// #define DISPL_RW       // read/write (non cablato con la rpi; tenerlo sempre basso con un pull down a GND)
 #define DISPL_E        24 // (rpi pin 18) enable (clock)
 #define DISPL_DB4      10 // (rpi pin 19) data bus
 #define DISPL_DB5       9 // (rpi pin 21) data bus
@@ -57,19 +60,21 @@
 };
 
 &soc {
-       hd44780: hd44780 {
-               compatible = "hd44780";
-               pinctrl-names = "default";
-               pinctrl-0 = <&hd44780_pins>;
-               // see Documentation/gpio/board.txt
-               lcd-gpios = <&gpio DISPL_RS 0>,
-                           <&gpio DISPL_E 0>,
-                           <&gpio DISPL_DB4 0>,
-                           <&gpio DISPL_DB5 0>,
-                           <&gpio DISPL_DB6 0>,
-                           <&gpio DISPL_DB7 0>;
-               status="okay";
-       };
+hd44780: hd44780 {
+	compatible = "hd44780";
+	pinctrl-names = "default";
+	pinctrl-0 = <&hd44780_pins>;
+	lines = <2>;
+	cols = <16>;
+	// see Documentation/gpio/board.txt
+	lcd-gpios = <&gpio DISPL_RS 0>,
+		<&gpio DISPL_E 0>,
+		<&gpio DISPL_DB4 0>,
+		<&gpio DISPL_DB5 0>,
+		<&gpio DISPL_DB6 0>,
+		<&gpio DISPL_DB7 0>;
+	status="okay";
+	};
 };
 
 &uart0 {
