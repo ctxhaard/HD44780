@@ -40,6 +40,8 @@
 #define CMD_RETURN_HOME       (1 << 1)
 #define CMD_SET_DDRAM         (1 << 7)
 #define CMD_SET_DDRAM_LINE(x)  (CMD_SET_DDRAM | (0x40 * (x - 1)))
+// TODO: gestire le linee
+#define CMD_SET_DDRAM_POS(x)  (CMD_SET_DDRAM  | x)
 
 #define CMD_CLEAR_DISP  0x01
 
@@ -67,18 +69,9 @@ static struct class *lcd_class;
 static dev_t first;
 static dev_t next;
 
-// TODO: il modulo deve creare un character device che permette solo operazioni di:
-// - scrittura : scrive direttamente nella prima posizione tutti i caratteri indicati; la riga sottostante è una
-//			mera continuazione della riga sopra
-// - lseek     : permette di posizionarsi direttamente su una certa posizione ed andare ad aggiornare solo questa
-//			(in modo da velocizzare le operazioni in cui una parte del testo è fissa e una parte viene aggiornata
-//			spesso; es: "distanza: 132 cm"
-
-// creazione del dispositivo a caratteri
-
 static void hd44780_pulse_enable(struct hd44780_data *pdata)
 {
-	dev_dbg(&pdata->pdev->dev,"=> EN pulse\n");
+//	dev_dbg(&pdata->pdev->dev,"=> EN pulse\n");
 	gpiod_set_value_cansleep(pdata->gpio_en, 0);
 	udelay(500);
 	gpiod_set_value_cansleep(pdata->gpio_en, 1);
@@ -89,7 +82,7 @@ static void hd44780_pulse_enable(struct hd44780_data *pdata)
 
 static void hd44780_write_4_bits(struct hd44780_data *pdata, u8 val)
 {
-	dev_dbg(&pdata->pdev->dev,"=> 0x%02x\n", (val & 0xf));
+//	dev_dbg(&pdata->pdev->dev,"=> 0x%02x\n", (val & 0xf));
 	gpiod_set_value_cansleep(pdata->gpio_db7, val & (1 << 3));
 	gpiod_set_value_cansleep(pdata->gpio_db6, val & (1 << 2));
 	gpiod_set_value_cansleep(pdata->gpio_db5, val & (1 << 1));
@@ -119,12 +112,13 @@ static void hd44780_char(struct hd44780_data *pdata, u8 val)
 	hd44780_send(pdata, val, 1);
 }
 
-static int hd44780_print(struct hd44780_data *pdata, char *msg) {
-	hd44780_command(pdata,CMD_CLEAR_DISP);
-
+static int hd44780_write(struct hd44780_data *pdata, char *msg, size_t pos)
+{
 	int i;
 	int cols, lines;
 	int cur_line;
+
+	dev_dbg(&pdata->pdev->dev, "writing at: %d\n", pos);
 
 	spin_lock(&pdata->lock);
 	cols = pdata->cols;
@@ -132,8 +126,11 @@ static int hd44780_print(struct hd44780_data *pdata, char *msg) {
 
 	spin_unlock(&pdata->lock);
 
-	i = 0;
-	cur_line = 1;
+	i = pos;
+
+	// TODO: convertire in pos LCD
+	hd44780_command(pdata, CMD_SET_DDRAM_POS(pos));
+	cur_line = 1 + (pos / cols);
 	while (*msg) {
 		if (i > lines * cols)
 			break;
@@ -156,6 +153,13 @@ static int hd44780_print(struct hd44780_data *pdata, char *msg) {
 		++msg;
 	}
 	return 0;
+
+}
+
+static int hd44780_clear(struct hd44780_data *pdata, char *msg) {
+	hd44780_command(pdata,CMD_CLEAR_DISP);
+
+	return hd44780_write(pdata, msg, 0);
 }
 
 static int hd44780_line(struct hd44780_data *pdata, char *txt, int line) {
@@ -164,10 +168,10 @@ static int hd44780_line(struct hd44780_data *pdata, char *txt, int line) {
 
 	switch(line) {
 	case 1:
-		cmd = CMD_SET_DDRAM_LINE_2;
+		cmd = CMD_SET_DDRAM_LINE(2);
 		break;
 	default:
-		cmd = CMD_SET_DDRAM_LINE_1;
+		cmd = CMD_SET_DDRAM_LINE(1);
 		break;
 	}
 	hd44780_command(pdata, cmd);
@@ -204,7 +208,7 @@ static int hd44780_setup(struct hd44780_data *pdata)
 	return 0;
 }
 
-int hd44780_open(struct inode *inode, struct file *filp)
+int hd44780_file_open(struct inode *inode, struct file *filp)
 {
 	struct hd44780_data *pdata; /* device information */
 	pdata = container_of(inode->i_cdev, struct hd44780_data, cdev);
@@ -213,7 +217,7 @@ int hd44780_open(struct inode *inode, struct file *filp)
 	return 0;
 }
 
-ssize_t hd44780_write (struct file *filp, const char __user *buff, size_t count, loff_t *offp)
+ssize_t hd44780_file_write (struct file *filp, const char __user *buff, size_t count, loff_t *offp)
 {
 	char *buffer;
 	struct hd44780_data *pdata;
@@ -236,7 +240,7 @@ ssize_t hd44780_write (struct file *filp, const char __user *buff, size_t count,
 	}
 
 	buffer[len] = 0x00;
-	hd44780_print(pdata, buffer);
+	hd44780_write(pdata, buffer, filp->f_pos);
 
 	kfree(buffer);
 
@@ -244,11 +248,36 @@ ssize_t hd44780_write (struct file *filp, const char __user *buff, size_t count,
 	return count;
 }
 
+
+loff_t hd44780_llseek (struct file *filp, loff_t off, int whence)
+{
+	loff_t newpos;
+
+	switch(whence)
+	{
+	case 0: /* SEEK_SET */
+		newpos = off;
+		break;
+	case 1: /* SEEK_CUR */
+		newpos = filp->f_pos + off;
+		break;
+	case 2: /* SEEK_END */
+	default:
+		return -EINVAL;
+	}
+
+	if (newpos < 0) return -EINVAL;
+	filp->f_pos = newpos;
+	return newpos;
+}
+
+
 struct file_operations hd44780_fops = {
 
 		.owner = THIS_MODULE,
-		.open  = hd44780_open,
-		.write = hd44780_write,
+		.open  = hd44780_file_open,
+		.write = hd44780_file_write,
+		.llseek = hd44780_llseek,
 };
 
 static int hd44780_probe(struct platform_device *pdev)
@@ -326,7 +355,7 @@ static int hd44780_probe(struct platform_device *pdev)
 	dev_set_drvdata(&pdev->dev, pdata);
 
 	hd44780_setup(pdata);
-	hd44780_prompt(pdata);
+	//hd44780_prompt(pdata);
 
 	// sysfs device
 	if( !lcd_class) {
@@ -377,7 +406,7 @@ static int hd44780_remove(struct platform_device *pdev)
 
 	cdev_del(&pdata->cdev);
 
-	hd44780_print(pdata, msg);
+	hd44780_clear(pdata, msg);
 	return 0;
 }
 

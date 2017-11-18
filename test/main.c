@@ -4,6 +4,8 @@
 #include <fcntl.h>
 #include <sys/wait.h>
 
+#define PACE_USEC (100000)
+
 #define xstr(a) str(a)
 #define str(a) #a
 
@@ -13,6 +15,8 @@ static void do_main(int num)
 	int pos;
 
 	pos = (num * 6);
+
+	srand(pos);
 
 	printf("task: %d opening %s\n", num, xstr(DEV));
 
@@ -27,10 +31,10 @@ static void do_main(int num)
 		int val;
 		int len;
 
-//		if (lseek(fd, pos, SEEK_SET) < 0) {
-//			perror("lseek error\n");
-//			return;
-//		}
+		if (lseek(fd, pos, SEEK_SET) < 0) {
+			perror("lseek error\n");
+			return;
+		}
 
 		val = ((long long)rand() * 1000 / RAND_MAX);
 		len = snprintf(buffer, 4, "%d", val);
@@ -40,7 +44,7 @@ static void do_main(int num)
 			return;
 		}
 		printf("task: %d => wrote [ %s ] on pos [ %d ]\n",num , buffer, pos);
-		usleep(500000);
+		usleep(PACE_USEC);
 	}
 	while(1);
 	close(fd);
