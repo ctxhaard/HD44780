@@ -20,7 +20,7 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
-//#define DEBUG
+#define DEBUG
 
 #include <linux/module.h>
 #include <linux/gpio/consumer.h>
@@ -39,8 +39,9 @@
 #define CMD_CLEAR_DISPLAY     (1 << 0)
 #define CMD_RETURN_HOME       (1 << 1)
 #define CMD_SET_DDRAM         (1 << 7)
-#define CMD_SET_DDRAM_LINE(x)  (CMD_SET_DDRAM | (0x40 * (x - 1)))
-// TODO: gestire le linee
+
+#define LINE_OFFSET (0x40)
+#define CMD_SET_DDRAM_LINE(x)  (CMD_SET_DDRAM | (LINE_OFFSET * (x - 1)))
 #define CMD_SET_DDRAM_POS(x)  (CMD_SET_DDRAM  | x)
 
 #define CMD_CLEAR_DISP  0x01
@@ -51,6 +52,7 @@ struct hd44780_data {
 	struct gpio_descs *gpios;
 	int lines;
 	int cols;
+	size_t size;
 	struct gpio_desc *gpio_rs;
 	struct gpio_desc *gpio_en;
 	struct gpio_desc *gpio_db4;
@@ -114,7 +116,7 @@ static void hd44780_char(struct hd44780_data *pdata, u8 val)
 
 static int hd44780_write(struct hd44780_data *pdata, char *msg, size_t pos)
 {
-	int i;
+	int lcd_pos;
 	int cols, lines;
 	int cur_line;
 
@@ -126,29 +128,33 @@ static int hd44780_write(struct hd44780_data *pdata, char *msg, size_t pos)
 
 	spin_unlock(&pdata->lock);
 
-	i = pos;
+	lcd_pos = ((pos / pdata->cols) * LINE_OFFSET) + (pos % pdata->cols);
 
-	// TODO: convertire in pos LCD
-	hd44780_command(pdata, CMD_SET_DDRAM_POS(pos));
-	cur_line = 1 + (pos / cols);
+	hd44780_command(pdata, CMD_SET_DDRAM_POS(lcd_pos));
+	cur_line = 1 + (lcd_pos / LINE_OFFSET);
+
 	while (*msg) {
-		if (i > lines * cols)
+		if (pos > lines * cols)
 			break;
+
 		if(*msg == '\n') {
 			++cur_line;
 			if(cur_line > lines)
 				break;
 			hd44780_command(pdata, CMD_SET_DDRAM_LINE(cur_line));
-			i = (i / cols) + cols;
+			pos = (pos / cols) + cols;
 		} else {
-			if (i && 0 == (i % 16)) {
-				++cur_line;
-				if(cur_line > lines)
-					break;
-				hd44780_command(pdata, CMD_SET_DDRAM_LINE(cur_line));
+			int line;
+
+			line = 1 + (pos / cols);
+			if(line > lines)
+				break;
+			if (line != cur_line) {
+				hd44780_command(pdata, CMD_SET_DDRAM_LINE(line));
+				cur_line = line;
 			}
 			hd44780_char(pdata, *msg);
-			++i;
+			++pos;
 		}
 		++msg;
 	}
@@ -213,7 +219,9 @@ int hd44780_file_open(struct inode *inode, struct file *filp)
 	struct hd44780_data *pdata; /* device information */
 	pdata = container_of(inode->i_cdev, struct hd44780_data, cdev);
 
+	// TODO: gestire apertura in append!!!
 	filp->private_data = pdata; /* for other methods */
+
 	return 0;
 }
 
@@ -223,14 +231,15 @@ ssize_t hd44780_file_write (struct file *filp, const char __user *buff, size_t c
 	struct hd44780_data *pdata;
 	size_t len;
 
-	// TODO: gestire reentrant
+	// TODO: gestire scrittura in append...
+
 	pdata = filp->private_data;
 
 	len = (pdata->cols * pdata->lines);
 	if (count < len)
 		len = count;
 
-	dev_dbg(&pdata->pdev->dev, "writing %d chars\n", len);
+	dev_dbg(&pdata->pdev->dev, "writing %d chars at: %lld\n", len, filp->f_pos);
 
 	if (NULL == (buffer = kmalloc((len + 1), GFP_KERNEL)))
 		return -ENOMEM;
@@ -245,6 +254,9 @@ ssize_t hd44780_file_write (struct file *filp, const char __user *buff, size_t c
 	kfree(buffer);
 
 	*offp += count;
+
+	if(*offp > pdata->size)
+		pdata->size = *offp;
 	return count;
 }
 
@@ -252,6 +264,10 @@ ssize_t hd44780_file_write (struct file *filp, const char __user *buff, size_t c
 loff_t hd44780_llseek (struct file *filp, loff_t off, int whence)
 {
 	loff_t newpos;
+	struct hd44780_data *pdata;
+
+	// TODO: gestire reentrant
+	pdata = filp->private_data;
 
 	switch(whence)
 	{
@@ -262,12 +278,16 @@ loff_t hd44780_llseek (struct file *filp, loff_t off, int whence)
 		newpos = filp->f_pos + off;
 		break;
 	case 2: /* SEEK_END */
+		newpos = pdata->size + off;
+		break;
 	default:
 		return -EINVAL;
 	}
 
 	if (newpos < 0) return -EINVAL;
 	filp->f_pos = newpos;
+
+	dev_dbg(&pdata->pdev->dev,"llseek new pos: %lld\n", newpos);
 	return newpos;
 }
 

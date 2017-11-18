@@ -4,7 +4,7 @@
 #include <fcntl.h>
 #include <sys/wait.h>
 
-#define PACE_USEC (100000)
+#define PACE_USEC (500000)
 
 #define xstr(a) str(a)
 #define str(a) #a
@@ -14,7 +14,7 @@ static void do_main(int num)
 	int fd;
 	int pos;
 
-	pos = (num * 6);
+	pos = 16 + (num * 6);
 
 	srand(pos);
 
@@ -54,13 +54,33 @@ int main(int argc, const char *argv[])
 {
 	int n_childs = 0;
 	pid_t pid;
+	int fd;
 	
 	printf("#################\nLCD test x86\n#################\n");
 	if (argc > 1) {
 		n_childs = atoi(argv[1]);
 	}
 
-	while (n_childs--) {
+	fd = open(xstr(DEV), O_WRONLY);
+	if(fd < 0) {
+		perror("cannot open device\n");
+		return -1;
+	}
+
+	if (lseek(fd, 2, SEEK_SET) < 0) {
+		perror("lseek error\n");
+		return -1;
+	}
+
+	if (write(fd,"Distance (cm)",13) < 0) {
+		perror("write error\n");
+		return -1;
+	}
+
+	close(fd);
+
+
+	while (n_childs) {
 		pid = fork();
 		if (!pid) {
 			/* child */
@@ -69,6 +89,7 @@ int main(int argc, const char *argv[])
 		} else if(pid < 0) {
 			perror("error forking\n");
 		}
+		--n_childs;
 	}
 	do_main(0);
 	wait(NULL);
