@@ -219,7 +219,10 @@ int hd44780_file_open(struct inode *inode, struct file *filp)
 	struct hd44780_data *pdata; /* device information */
 	pdata = container_of(inode->i_cdev, struct hd44780_data, cdev);
 
-	// TODO: gestire apertura in append!!!
+	if (filp->f_flags & O_APPEND) {
+		filp->f_pos = pdata->size;
+	}
+
 	filp->private_data = pdata; /* for other methods */
 
 	return 0;
