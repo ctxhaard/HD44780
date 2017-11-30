@@ -16,6 +16,17 @@
 #define DISPL_DB7      25 // (rpi pin 22) data bus
 // ------------------------------------
 
+// proximity sensor -------------------
+#define PROX_TRIGGER_1  7
+#define PROX_ECHO_1     8
+
+#define PROX_TRIGGER_2  17
+#define PROX_ECHO_2     4
+
+#define PROX_TRIGGER_3  22
+#define PROX_ECHO_3     27
+// ------------------------------------
+
 / {
 	model = "Raspberry Pi Model B";
 };
@@ -57,24 +68,73 @@
 				DISPL_DB6 DISPL_DB7>;
 		brcm,function = <1>;    // output
 	};
+	
+	hcsr04_pins_1: hcsr04_pins@1 {
+       brcm,pins =    <PROX_TRIGGER_1 PROX_ECHO_1>;   // trigger, echo
+       brcm,function = <1 0>;    // out,  in
+       brcm,pull =     <0 0>;      // none
+	};
+
+	hcsr04_pins_2: hcsr04_pins@2 {
+       brcm,pins =    <PROX_TRIGGER_2 PROX_ECHO_2>;   // trigger, echo
+       brcm,function = <1 0>;    // out,  in
+       brcm,pull =     <0 0>;      // none
+	};
+
+	hcsr04_pins_3: hcsr04_pins@3 {
+       brcm,pins =    <PROX_TRIGGER_3 PROX_ECHO_3>;   // trigger, echo
+       brcm,function = <1 0>;    // out,  in
+       brcm,pull =     <0 0>;      // none
+	};
 };
 
 &soc {
-hd44780: hd44780 {
-	compatible = "hd44780";
-	pinctrl-names = "default";
-	pinctrl-0 = <&hd44780_pins>;
-	lines = <2>;
-	cols = <16>;
-	// see Documentation/gpio/board.txt
-	lcd-gpios = <&gpio DISPL_RS 0>,
-		<&gpio DISPL_E 0>,
-		<&gpio DISPL_DB4 0>,
-		<&gpio DISPL_DB5 0>,
-		<&gpio DISPL_DB6 0>,
-		<&gpio DISPL_DB7 0>;
-	status="okay";
+	hd44780 {
+		compatible = "hd44780";
+		pinctrl-names = "default";
+		pinctrl-0 = <&hd44780_pins>;
+		lines = <2>;
+		cols = <16>;
+		// see Documentation/gpio/board.txt
+		lcd-gpios = <&gpio DISPL_RS 0>,
+			<&gpio DISPL_E 0>,
+			<&gpio DISPL_DB4 0>,
+			<&gpio DISPL_DB5 0>,
+			<&gpio DISPL_DB6 0>,
+			<&gpio DISPL_DB7 0>;
+		status="okay";
 	};
+	
+   hcsr04@1 {
+       compatible = "hcsr04";
+       pinctrl-names = "default";
+       pinctrl-0 = <&hcsr04_pins_1>;
+       // see Documentation/gpio/board.txt
+       proximity-gpios = <&gpio PROX_TRIGGER_1 0>, // trigger
+                         <&gpio PROX_ECHO_1 0>; // echo
+       status="okay";
+   };
+
+   hcsr04@2 {
+       compatible = "hcsr04";
+       pinctrl-names = "default";
+       pinctrl-0 = <&hcsr04_pins_2>;
+       // see Documentation/gpio/board.txt
+       proximity-gpios = <&gpio PROX_TRIGGER_2 0>, // trigger
+                         <&gpio PROX_ECHO_2 0>; // echo
+       status="okay";
+   };
+
+   hcsr04@3 {
+       compatible = "hcsr04";
+       pinctrl-names = "default";
+       pinctrl-0 = <&hcsr04_pins_3>;
+       // see Documentation/gpio/board.txt
+       proximity-gpios = <&gpio PROX_TRIGGER_3 0>, // trigger
+                         <&gpio PROX_ECHO_3 0>; // echo
+       status="okay";
+   };
+
 };
 
 &uart0 {
