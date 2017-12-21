@@ -20,7 +20,7 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
-#define DEBUG
+//#define DEBUG
 
 #include <linux/module.h>
 #include <linux/gpio/consumer.h>
@@ -65,6 +65,7 @@ struct hd44780_data {
 
 	spinlock_t lock;
 	spinlock_t write_lock;
+	struct mutex mutex;
 };
 
 static struct class *lcd_class;
@@ -129,6 +130,8 @@ static int hd44780_write(struct hd44780_data *pdata, char *msg, size_t pos)
 	spin_unlock(&pdata->lock);
 
 	lcd_pos = ((pos / pdata->cols) * LINE_OFFSET) + (pos % pdata->cols);
+	
+	mutex_lock(&pdata->mutex);
 
 	hd44780_command(pdata, CMD_SET_DDRAM_POS(lcd_pos));
 	cur_line = 1 + (lcd_pos / LINE_OFFSET);
@@ -158,6 +161,7 @@ static int hd44780_write(struct hd44780_data *pdata, char *msg, size_t pos)
 		}
 		++msg;
 	}
+	mutex_unlock(&pdata->mutex);
 	return 0;
 
 }
@@ -319,6 +323,7 @@ static int hd44780_probe(struct platform_device *pdev)
 
 	spin_lock_init(&pdata->lock);
 	spin_lock_init(&pdata->write_lock);
+	mutex_init(&pdata->mutex);
 
 	spin_lock(&pdata->lock);
 	pdata->pdev = pdev;

@@ -9,8 +9,9 @@ ARCH ?= arm
 CROSS_COMPILE ?= arm-linux-gnueabihf-
 
 default:
-	$(MAKE) -C $(KDIR) M=$$PWD ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) -j8 && scp $$PWD/hd44780.ko root@uraspi:/root/
-# && cp $$PWD/hcsr04.ko /mnt/robottino/home/pi/
+	$(MAKE) -C $(KDIR) M=$$PWD ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) -j8
+       
+#       && scp $$PWD/hd44780.ko root@uraspi:/root/
 
 # add module specific targets here
 endif

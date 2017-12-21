@@ -4,7 +4,6 @@
 #include <fcntl.h>
 #include <sys/wait.h>
 
-//#define PACE_USEC (500000)
 #define OUT_LEN (5)
 
 #define xstr(a) str(a)
@@ -19,7 +18,7 @@ static void do_main(int num)
 
 	pos = 16 + (num * 6);
 
-	srand(pos);
+	//srand(pos);
 
 	printf("task: %d opening %s\n", num, xstr(DEV));
 
@@ -47,8 +46,6 @@ static void do_main(int num)
 			return;
 		}
 
-//		val = ((long long)rand() * 1000 / RAND_MAX);
-//		len = snprintf(buffer, 4, "%d", val);
 		len = read(fd_prox, buffer, OUT_LEN - 1);
 		if (len < 0) {
 			perror("read error\n");
@@ -61,16 +58,11 @@ static void do_main(int num)
 
 		sprintf(buffer, "%*d", (OUT_LEN-1), val);
 
-//		while (len < 6) {
-//			buffer[len++] = ' ';
-//		}
-		//buffer[6] = '\0';
 		if (write(fd_lcd,buffer,(OUT_LEN-1)) < 0) {
 			perror("write error\n");
 			return;
 		}
-		printf("task: %d => wrote [ %s ] on pos [ %d ]\n",num , buffer, pos);
-//		usleep(PACE_USEC);
+		//printf("task: %d => wrote [ %s ] on pos [ %d ]\n",num , buffer, pos);
 	}
 	while(1);
 	close(fd_prox);
@@ -111,7 +103,6 @@ int main(int argc, const char *argv[])
 		pid = fork();
 		if (!pid) {
 			/* child */
-			// usleep(100000 * n_childs); // per sfalsare i processi
 			do_main(n_childs);
 		} else if(pid < 0) {
 			perror("error forking\n");
